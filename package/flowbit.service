@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowBit (NETINSIGHT ingestor; fork of netsampler/goflow2)
+Description=FlowBit (NETINSIGHT ingestor)
 After=network.target
 
 [Service]

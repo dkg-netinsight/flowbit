@@ -2,7 +2,6 @@
 dist/
 flowbit-test
 /flowbit
-/goflow2
 
 # Go
 *.exe

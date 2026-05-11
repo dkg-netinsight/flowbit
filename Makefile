@@ -14,7 +14,7 @@ TAG           ?= $(shell git describe --tags --abbrev=0 HEAD)
 VERSION_PKG   ?= $(shell echo $(VERSION) | sed 's/^v//g')
 LICENSE       := BSD-3-Clause
 URL           := https://github.com/dkg-netinsight/flowbit
-DESCRIPTION   := FlowBit: NETINSIGHT ingestor (fork of netsampler/goflow2)
+DESCRIPTION   := FlowBit: NETINSIGHT ingestor
 DATE          :=  $(shell date +%FT%T%z)
 BUILDINFOS    ?=  ($(DATE)$(BUILDINFOSDET))
 LDFLAGS       ?= '-X main.version=$(VERSION) -X main.buildinfos=$(BUILDINFOS)'

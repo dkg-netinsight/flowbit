@@ -1,0 +1,18 @@
+# Build outputs
+dist/
+flowbit-test
+/flowbit
+/goflow2
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

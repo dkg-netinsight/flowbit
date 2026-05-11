@@ -1,0 +1,13 @@
+[Unit]
+Description=FlowBit (NETINSIGHT ingestor; fork of netsampler/goflow2)
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/flowbit
+WorkingDirectory=/usr/share/flowbit
+ExecStart=/usr/sbin/flowbit $FLOWBIT_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target

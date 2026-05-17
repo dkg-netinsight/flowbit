@@ -1,0 +1,155 @@
+name: Build FlowBit binary on tag
+
+on:
+  push:
+    tags:
+      - 'v2.2.4-flowbit.*'
+  workflow_dispatch:
+    inputs:
+      tag_ref:
+        description: 'Tag to build (e.g. v2.2.4-flowbit.2)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build + sweep + release (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout source at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag_ref || github.ref }}
+          fetch-depth: 1
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.tag_ref }}" ]; then
+            TAG="${{ github.event.inputs.tag_ref }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "name=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "Building ${TAG}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Build hardened PIE binary
+        run: |
+          set -euo pipefail
+          DATE=$(date -Iseconds)
+          mkdir -p dist
+          OUT="dist/flowbit-${{ steps.tag.outputs.name }}-linux-amd64"
+          go build -trimpath -buildmode=pie \
+            -ldflags "-s -w -linkmode=external -extldflags '-Wl,-z,relro,-z,now' -X main.version=${{ steps.tag.outputs.name }} -X main.buildinfos=(${DATE})" \
+            -o "${OUT}" ./cmd/flowbit
+          ls -lh "${OUT}"
+          file "${OUT}"
+
+      - name: Verify hardening
+        run: |
+          set -euo pipefail
+          OUT="dist/flowbit-${{ steps.tag.outputs.name }}-linux-amd64"
+          echo "--- ELF Type (must be DYN/PIE) ---"
+          readelf -h "${OUT}" | grep Type
+          echo "--- GNU_RELRO segment (must exist) ---"
+          readelf -l "${OUT}" | grep -i relro
+          echo "--- BIND_NOW + PIE flags ---"
+          readelf -d "${OUT}" | grep -E "BIND_NOW|FLAGS_1"
+          echo "--- file ---"
+          file "${OUT}" | grep -q "pie executable" && echo "  PIE confirmed" || { echo "  NOT PIE"; exit 1; }
+          file "${OUT}" | grep -q "stripped" && echo "  stripped confirmed" || { echo "  not stripped"; exit 1; }
+
+      - name: Strings sweep (must return 0 upstream-name hits)
+        run: |
+          set -euo pipefail
+          OUT="dist/flowbit-${{ steps.tag.outputs.name }}-linux-amd64"
+          HITS=$(strings "${OUT}" | grep -ciE "goflow2|netsampler" || true)
+          FORK=$(strings "${OUT}" | grep -c "dkg-netinsight/flowbit" || true)
+          echo "goflow2|netsampler string hits: ${HITS} (must be 0)"
+          echo "dkg-netinsight/flowbit hits: ${FORK} (must be > 100)"
+          if [ "${HITS}" != "0" ]; then
+            echo "FAIL: upstream-name strings leaked into binary"
+            strings "${OUT}" | grep -iE "goflow2|netsampler" | head -10
+            exit 1
+          fi
+          if [ "${FORK}" -lt 100 ]; then
+            echo "FAIL: fork-module path mention count suspiciously low"
+            exit 1
+          fi
+
+      - name: Version banner smoke
+        run: |
+          set -euo pipefail
+          OUT="dist/flowbit-${{ steps.tag.outputs.name }}-linux-amd64"
+          BANNER=$("${OUT}" -v 2>&1 || true)
+          echo "${BANNER}"
+          echo "${BANNER}" | grep -q "FLOWBIT" || { echo "FAIL: banner does not contain FLOWBIT"; exit 1; }
+
+      - name: SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum "flowbit-${{ steps.tag.outputs.name }}-linux-amd64" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          DATE=$(date -Iseconds)
+          {
+            echo "Automated FlowBit binary build for tag \`${{ steps.tag.outputs.name }}\`."
+            echo "Built by GitHub Actions on ${DATE}."
+            echo
+            echo "## Build provenance"
+            echo
+            echo "~~~"
+            echo "go build -trimpath -buildmode=pie \\"
+            echo "  -ldflags \"-s -w -linkmode=external -extldflags '-Wl,-z,relro,-z,now' \\"
+            echo "            -X main.version=${{ steps.tag.outputs.name }} \\"
+            echo "            -X main.buildinfos=(\${DATE})\" \\"
+            echo "  -o flowbit ./cmd/flowbit"
+            echo "~~~"
+            echo
+            echo "## Properties"
+            echo
+            echo "- ELF 64-bit LSB PIE executable, x86-64, dynamically linked, stripped"
+            echo "- PIE + GNU_RELRO + BIND_NOW hardening enabled"
+            echo "- 0 \`goflow2\` / \`netsampler\` strings in stripped binary"
+            echo "- Built on Go 1.24 ubuntu-22.04 GitHub-hosted runner"
+            echo
+            echo "## License"
+            echo
+            echo "BSD 3-Clause (see \`LICENSE\`)."
+          } > /tmp/release-notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.name }}"
+          if gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists; uploading assets (clobber existing)."
+            gh release upload "${TAG}" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              "dist/flowbit-${TAG}-linux-amd64" \
+              "dist/SHA256SUMS"
+          else
+            echo "Release ${TAG} does not exist; creating."
+            gh release create "${TAG}" \
+              --repo "${{ github.repository }}" \
+              --title "FlowBit ${TAG}" \
+              --notes-file /tmp/release-notes.md \
+              "dist/flowbit-${TAG}-linux-amd64" \
+              "dist/SHA256SUMS"
+          fi
